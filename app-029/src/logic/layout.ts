@@ -178,7 +178,7 @@ function buildAtSize(
   for (const ln of lineNos) {
     const items = itemsByLine.get(ln) ?? []
     const geoms = items.map((it) => {
-      const g = getGlyphGeom(st.fontId, st.weight, it.char)
+      const g = getGlyphGeom(st.fontId, st.weight, it.char, st.fontFamily)
       const ok = !!g && !g.missing
       if (!ok) missingCount++
       return { geom: ok ? (g as GlyphGeom) : missingGeom(it.char, st.fontId, st.weight), ok, blank: ok && (g as GlyphGeom).blank }
@@ -506,6 +506,7 @@ export function defaultProject(id: string, panel?: Partial<SignPanel>): Project 
         align: 'center',
         baseSizeMm: 300,
         fontId: 'hei',
+        fontFamily: 'Noto Sans SC',
         weight: 400,
         strokeLimitMm: 8,
         trackRatio: 0.1,

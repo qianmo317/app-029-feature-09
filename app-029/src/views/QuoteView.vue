@@ -1,7 +1,8 @@
 ﻿<script setup lang="ts">
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { findFont } from '../logic/fontLoader'
+import FontStatusBanner from '../components/FontStatusBanner.vue'
+import { findFont, findFontByFamily } from '../logic/fontLoader'
 import { buildQuoteDoc, exportQuoteXls, exportProcessCardCsv } from '../logic/quote'
 import { assertBomSum, buildBom, compareMaterials, yuan } from '../logic/materials'
 import { alignLabel, mountingLabel } from '../logic/layout'
@@ -25,8 +26,10 @@ const bom = computed(() =>
 const fontLabel = computed(() => {
   const p = project.value
   if (!p) return ''
-  const f = findFont(p.layout.settings.fontId)
-  return f ? `${f.label}（${f.family}）` : ''
+  const s = p.layout.settings
+  const f = findFont(s.fontId) ?? (s.fontFamily ? findFontByFamily(s.fontFamily) : null)
+  if (f) return `${f.label}（${f.family}）`
+  return s.fontFamily ? `${s.fontFamily}（字体不可用）` : '字体不可用'
 })
 const doc = computed(() =>
   project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value) : null
@@ -62,6 +65,7 @@ function toCsv(): void {
     </div>
 
     <template v-else>
+      <FontStatusBanner :session="session" class="no-print" />
       <div class="row no-print" style="margin-bottom: 12px">
         <button class="primary" :disabled="bom?.blocked" @click="printNow">打印 / 导出 PDF</button>
         <button :disabled="bom?.blocked" @click="toExcel">导出 Excel（.xls）</button>

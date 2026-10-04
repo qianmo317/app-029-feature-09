@@ -2,7 +2,8 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import SheetDiagram from '../components/SheetDiagram.vue'
-import { findFont } from '../logic/fontLoader'
+import FontStatusBanner from '../components/FontStatusBanner.vue'
+import { findFont, findFontByFamily } from '../logic/fontLoader'
 import { alignLabel } from '../logic/layout'
 import { assertBomSum, buildBom, compareMaterials, yuan } from '../logic/materials'
 import { bomGroupLabel, exportProcessCardCsv } from '../logic/quote'
@@ -43,7 +44,9 @@ function applySheet(id: string): void {
 
 function processCard(): void {
   if (project.value && layout.value && bom.value) {
-    exportProcessCardCsv(project.value, layout.value, bom.value, findFont(project.value.layout.settings.fontId)?.family ?? '')
+    const s = project.value.layout.settings
+    const f = findFont(s.fontId) ?? (s.fontFamily ? findFontByFamily(s.fontFamily) : null)
+    exportProcessCardCsv(project.value, layout.value, bom.value, f?.family ?? s.fontFamily ?? '字体不可用')
   }
 }
 </script>
@@ -56,6 +59,7 @@ function processCard(): void {
     </div>
 
     <template v-else>
+      <FontStatusBanner :session="session" />
       <div v-if="bom?.blocked" class="banner bad">
         <b>工艺风险拦截：</b>
         <ul class="notes" style="color: inherit">

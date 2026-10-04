@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import PanelPreview from '../components/PanelPreview.vue'
+import FontStatusBanner from '../components/FontStatusBanner.vue'
 import { computeLed, ledRows } from '../logic/led'
 import { getProject } from '../logic/store'
 import { useSession } from '../logic/useSession'
@@ -51,6 +52,7 @@ const grade = computed(() => {
     </div>
 
     <template v-else>
+      <FontStatusBanner :session="session" />
       <div class="split">
         <section class="card">
           <header>

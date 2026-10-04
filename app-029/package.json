@@ -8,7 +8,8 @@
     "dev": "vite",
     "build": "vue-tsc --noEmit && vite build",
     "preview": "vite preview --port 8109 --strictPort",
-    "typecheck": "vue-tsc --noEmit"
+    "typecheck": "vue-tsc --noEmit",
+    "verify:fonts": "node scripts/verify-local-fonts.cjs"
   },
   "dependencies": {
     "opentype.js": "^1.3.4",

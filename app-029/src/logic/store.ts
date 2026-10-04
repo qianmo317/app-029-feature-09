@@ -14,6 +14,8 @@ const KEY_PREFS = 'app029.prefs.v1'
 
 export interface Prefs {
   defaultFontId: string
+  /** 默认字体名称（认字体按名称，不按先后；旧偏好无此项时按 defaultFontId 映射） */
+  defaultFontFamily?: string
   defaultWeight: number
   nightPreview: boolean
 }
@@ -82,6 +84,7 @@ export function createProject(name: string, panel?: { wMm?: number; hMm?: number
   p.name = name
   const prefs = loadPrefs()
   p.layout.settings.fontId = prefs.defaultFontId
+  if (prefs.defaultFontFamily) p.layout.settings.fontFamily = prefs.defaultFontFamily
   p.layout.settings.weight = prefs.defaultWeight
   saveProject(p)
   return p

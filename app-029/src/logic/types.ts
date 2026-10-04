@@ -30,7 +30,13 @@ export interface CharItem {
 export interface LayoutSettings {
   align: Align
   baseSizeMm: number
+  /** 字体条目 id（自带字为 hei/song/…，本地独有字为 local:<slug>）；仅作快速定位 */
   fontId: string
+  /**
+   * 字体名称（认字体的唯一依据）：自带字体与上传字体同名时按名称认，不按先后认。
+   * 旧数据没有该字段时，按 fontId 的自带字体固定映射表还原名称。
+   */
+  fontFamily?: string
   weight: number
   strokeLimitMm: number
   /** 默认字距 = trackRatio × 字号 */

@@ -1,22 +1,31 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ensureFont, findFont, listFonts } from '../logic/fontLoader'
+import { canonicalSettings, ensureResolved, findFont, listFonts, resolveProjectFont } from '../logic/fontLoader'
 import { computeLayout, mountingLabel, textToItems } from '../logic/layout'
 import { buildBom } from '../logic/materials'
 import { compareMaterials } from '../logic/materials'
 import { bomGroupLabel } from '../logic/quote'
-import { createProject, deleteProject, duplicateProject, listProjects, loadPreset, loadPrefs, saveProject } from '../logic/store'
+import { createProject, deleteProject, duplicateProject, listProjects, loadPreset, loadPrefs, saveProject, savePrefs } from '../logic/store'
 import type { Align, Mounting, Project } from '../logic/types'
 import { yuan } from '../logic/materials'
 
 const router = useRouter()
 const projects = ref<Project[]>([])
 const preset = ref(loadPreset())
-const prefs = loadPrefs()
+const initialPrefs = loadPrefs()
 const error = ref('')
 const batchTick = ref(0)
 const selected = ref<string[]>([])
+
+function initialFont(): { id: string; family: string; weight: number } {
+  // 默认字体按名称认；偏好里的默认若已不在字库，回落到黑体并提示
+  const byName = initialPrefs.defaultFontFamily ? listFonts().find((f) => f.family === initialPrefs.defaultFontFamily) : null
+  const f = byName ?? findFont(initialPrefs.defaultFontId) ?? findFont('hei')
+  const w = f?.weights.some((x) => x.weight === initialPrefs.defaultWeight) ? initialPrefs.defaultWeight : f?.weights[0]?.weight ?? 400
+  return { id: f?.id ?? 'hei', family: f?.family ?? 'Noto Sans SC', weight: w }
+}
+const initFont = initialFont()
 
 const draft = ref({
   name: '沿街店面门头',
@@ -25,15 +34,42 @@ const draft = ref({
   frameMm: 60,
   mounting: 'board' as Mounting,
   text: '广告招牌制作',
-  fontId: prefs.defaultFontId,
-  weight: prefs.defaultWeight,
+  fontId: initFont.id,
+  fontFamily: initFont.family,
+  weight: initFont.weight,
   baseSizeMm: 300,
   align: 'center' as Align,
   trackRatio: 0.1
 })
 
 const fonts = computed(() => listFonts())
-const weightOptions = computed(() => findFont(draft.value.fontId)?.weights.map((w) => w.weight) ?? [400])
+const selectedDraftFont = computed(() => findFont(draft.value.fontId))
+const weightOptions = computed(() => selectedDraftFont.value?.weights.map((w) => w.weight) ?? [400])
+/** 偏好里记录的新建默认字体已不在字库（登记被删等）：本次回落，但明确提示，不悄悄改偏好 */
+const defaultFontMissing = computed(
+  () =>
+    !!initialPrefs.defaultFontFamily &&
+    !listFonts().some(
+      (f) => f.family === initialPrefs.defaultFontFamily && f.weights.some((w) => w.weight === initialPrefs.defaultWeight)
+    )
+)
+const defaultMissingText = computed(() =>
+  defaultFontMissing.value
+    ? `新建项目默认字体「${initialPrefs.defaultFontFamily}」字重 ${initialPrefs.defaultWeight} 已不可用（本机登记可能已删除）；本次新建临时回落到「${draft.value.fontFamily}」，可在字库页重新指定默认。`
+    : ''
+)
+
+function pickDraftFont(fontId: string): void {
+  draft.value.fontId = fontId
+  const f = findFont(fontId)
+  if (!f) return
+  draft.value.fontFamily = f.family
+  if (!f.weights.some((w) => w.weight === draft.value.weight)) draft.value.weight = f.weights[0]?.weight ?? 400
+}
+
+function pickDraftWeight(weight: number): void {
+  draft.value.weight = weight
+}
 
 function refresh(): void {
   projects.value = listProjects()
@@ -44,7 +80,9 @@ onMounted(refresh)
 watch(
   () => draft.value.fontId,
   (id) => {
-    const ws = findFont(id)?.weights.map((w) => w.weight) ?? [400]
+    const f = findFont(id)
+    if (f) draft.value.fontFamily = f.family
+    const ws = f?.weights.map((w) => w.weight) ?? [400]
     if (!ws.includes(draft.value.weight)) draft.value.weight = ws[0]
   }
 )
@@ -66,16 +104,28 @@ function create(): void {
     frameMm: draft.value.frameMm
   })
   p.layout.panel.mounting = draft.value.mounting
-  p.layout.settings.fontId = draft.value.fontId
-  p.layout.settings.weight = draft.value.weight
+  const c = canonicalSettings({ fontId: draft.value.fontId, fontFamily: draft.value.fontFamily, weight: draft.value.weight })
+  p.layout.settings.fontId = c.fontId
+  p.layout.settings.fontFamily = c.fontFamily
+  p.layout.settings.weight = c.weight
   p.layout.settings.baseSizeMm = draft.value.baseSizeMm
   p.layout.settings.align = draft.value.align
   p.layout.settings.trackRatio = draft.value.trackRatio
   p.layout.settings.strokeLimitMm = preset.value.process.strokeLimitMm
   p.layout.items = textToItems(text, [], p.layout.settings, draft.value.baseSizeMm)
   saveProject(p)
-  ensureFont(p.layout.settings.fontId, p.layout.settings.weight).catch(() => undefined)
+  // 同步新建默认偏好（名称为准）
+  savePrefs({ defaultFontId: c.fontId, defaultFontFamily: c.fontFamily, defaultWeight: c.weight })
+  ensureResolved(resolveProjectFont(p.layout.settings, `项目「${p.name}」`)).catch(() => undefined)
   router.push(`/edit/${p.id}`)
+}
+
+/** 项目字体状态：ok=可排；missing=引用名称在字库里找不到；unknown=未加载 */
+function projectFontState(p: Project): { label: string; cls: string } {
+  const r = resolveProjectFont(p.layout.settings, `项目「${p.name}」`)
+  const label = r.font ? r.font.label : r.familyName || '未知字体'
+  if (r.missing) return { label: `${label}（字体不可用）`, cls: 'bad' }
+  return { label, cls: '' }
 }
 
 function open(id: string): void {
@@ -100,15 +150,10 @@ function charCount(p: Project): number {
 
 // ---------- 导视牌批量：统一排版 + 材料汇总 ----------
 watch(selected, async () => {
-  const need = new Set<string>()
   for (const p of projects.value) {
     if (!selected.value.includes(p.id)) continue
-    need.add(`${p.layout.settings.fontId}|${p.layout.settings.weight}`)
-  }
-  for (const key of need) {
-    const [fid, w] = key.split('|')
     try {
-      await ensureFont(fid, Number(w))
+      await ensureResolved(resolveProjectFont(p.layout.settings, `项目「${p.name}」`))
     } catch {
       // 字体不可用时该项会显示缺失提示
     }
@@ -142,9 +187,11 @@ const batchTotal = computed(() => {
 })
 
 function applyUnified(): void {
+  const c = canonicalSettings({ fontId: draft.value.fontId, fontFamily: draft.value.fontFamily, weight: draft.value.weight })
   const unify = {
-    fontId: draft.value.fontId,
-    weight: draft.value.weight,
+    fontId: c.fontId,
+    fontFamily: c.fontFamily,
+    weight: c.weight,
     baseSizeMm: draft.value.baseSizeMm,
     align: draft.value.align,
     trackRatio: draft.value.trackRatio
@@ -152,13 +199,14 @@ function applyUnified(): void {
   for (const p of listProjects()) {
     if (!selected.value.includes(p.id)) continue
     p.layout.settings.fontId = unify.fontId
+    p.layout.settings.fontFamily = unify.fontFamily
     p.layout.settings.weight = unify.weight
     p.layout.settings.baseSizeMm = unify.baseSizeMm
     p.layout.settings.align = unify.align
     p.layout.settings.trackRatio = unify.trackRatio
     p.layout.items = textToItems(p.layout.items.map((i) => i.char).join(''), p.layout.items, p.layout.settings, unify.baseSizeMm)
     saveProject(p)
-    ensureFont(p.layout.settings.fontId, p.layout.settings.weight).catch(() => undefined)
+    ensureResolved(resolveProjectFont(p.layout.settings, `项目「${p.name}」`)).catch(() => undefined)
   }
   refresh()
   batchTick.value++
@@ -174,6 +222,7 @@ function applyUnified(): void {
           <span class="hint">建立后进入排版编辑</span>
         </header>
         <div class="banner bad" v-if="error">{{ error }}</div>
+        <div class="banner warn" v-if="defaultFontMissing">{{ defaultMissingText }}</div>
         <div class="field">
           <label>项目名称</label>
           <div class="ctl"><input type="text" v-model="draft.name" style="width: 200px" /></div>
@@ -208,10 +257,12 @@ function applyUnified(): void {
         <div class="field" style="margin-top: 8px">
           <label>字体 / 字重</label>
           <div class="ctl">
-            <select v-model="draft.fontId">
-              <option v-for="f in fonts" :key="f.id" :value="f.id">{{ f.label }}（{{ f.family }}）</option>
+            <select :value="draft.fontId" @change="pickDraftFont(($event.target as HTMLSelectElement).value)">
+              <option v-for="f in fonts" :key="f.id" :value="f.id">
+                {{ f.label }}（{{ f.family }}）{{ f.local ? '· 本机' : '· 自带' }}
+              </option>
             </select>
-            <select v-model.number="draft.weight">
+            <select :value="draft.weight" @change="pickDraftWeight(Number(($event.target as HTMLSelectElement).value))">
               <option v-for="w in weightOptions" :key="w" :value="w">{{ w }}</option>
             </select>
           </div>
@@ -270,7 +321,8 @@ function applyUnified(): void {
               <td>
                 <a href="#" @click.prevent="open(p.id)">{{ p.name }}</a>
                 <div class="muted">
-                  {{ findFont(p.layout.settings.fontId)?.label }} · {{ p.layout.settings.baseSizeMm }}mm ·
+                  <span :class="{ bad: projectFontState(p).cls === 'bad' }">{{ projectFontState(p).label }}</span>
+                  · {{ p.layout.settings.baseSizeMm }}mm ·
                   {{ mountingLabel(p.layout.panel.mounting) }}
                 </div>
               </td>

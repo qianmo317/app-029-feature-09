@@ -2,7 +2,8 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PanelPreview from '../components/PanelPreview.vue'
-import { findFont, fontState, listFonts } from '../logic/fontLoader'
+import FontStatusBanner from '../components/FontStatusBanner.vue'
+import { canonicalSettings, findFont } from '../logic/fontLoader'
 import { round1, textToItems } from '../logic/layout'
 import { getProject } from '../logic/store'
 import { loadPrefs, savePrefs } from '../logic/store'
@@ -15,14 +16,36 @@ const loaded = ref<Project | null>(getProject(id))
 const session = useSession(loaded)
 const overlays = ref({ blocks: true, minStroke: true, led: false })
 const active = ref<number | null>(0)
-const fontError = ref('')
 
 const project = computed(() => loaded.value)
 const layout = session.layout
-const fonts = computed(() => listFonts())
-const weightOptions = computed(() =>
-  project.value ? findFont(project.value.layout.settings.fontId)?.weights.map((w) => w.weight) ?? [] : []
-)
+const fonts = computed(() => session.replacementFonts.value)
+const selectedFont = computed(() => (project.value ? findFont(project.value.layout.settings.fontId) : null))
+const weightOptions = computed(() => selectedFont.value?.weights.map((w) => w.weight) ?? [])
+
+/** 在下拉里选字体：按名称写回（自带/本机同名视为同一份，刷新不断） */
+function onPickFont(fontId: string): void {
+  const p = project.value
+  if (!p) return
+  const f = fonts.value.find((x) => x.id === fontId)
+  if (!f) return
+  const w = f.weights.some((x) => x.weight === p.layout.settings.weight) ? p.layout.settings.weight : f.weights[0]?.weight ?? 400
+  const c = canonicalSettings({ fontId: f.id, fontFamily: f.family, weight: w })
+  p.layout.settings.fontId = c.fontId
+  p.layout.settings.fontFamily = c.fontFamily
+  p.layout.settings.weight = c.weight
+}
+
+function onPickWeight(weight: number): void {
+  const p = project.value
+  if (!p) return
+  const f = selectedFont.value
+  if (!f) return
+  const c = canonicalSettings({ fontId: f.id, fontFamily: f.family, weight })
+  p.layout.settings.fontId = c.fontId
+  p.layout.settings.fontFamily = c.fontFamily
+  p.layout.settings.weight = c.weight
+}
 
 const text = computed({
   get: () => {
@@ -44,27 +67,12 @@ const text = computed({
 })
 
 const perfText = computed(() => (session.perfMs.value ? `${session.perfMs.value.toFixed(1)}ms` : '—'))
-const fontStatus = computed(() => {
-  void session.fontTick.value
-  const p = project.value
-  if (!p) return ''
-  const st = fontState(p.layout.settings.fontId, p.layout.settings.weight)
-  return st.message
-})
 const fontOk = session.fontOk
 
-onMounted(async () => {
+onMounted(() => {
   window.addEventListener('keydown', onKey)
   const p = project.value
-  if (p) {
-    try {
-      await (await import('../logic/fontLoader')).ensureFont(p.layout.settings.fontId, p.layout.settings.weight)
-      fontError.value = ''
-    } catch (e) {
-      fontError.value = e instanceof Error ? e.message : '该字体不可用'
-    }
-    active.value = p.layout.items.length ? 0 : null
-  }
+  if (p) active.value = p.layout.items.length ? 0 : null
 })
 onUnmounted(() => window.removeEventListener('keydown', onKey))
 
@@ -164,8 +172,8 @@ function areaM2(w: number, h: number): string {
     </div>
 
     <template v-else>
-      <div class="banner bad" v-if="fontError">{{ fontError }}</div>
-      <div class="banner info" v-else-if="!fontOk">字体状态：{{ fontStatus }}</div>
+      <FontStatusBanner :session="session" />
+      <div class="banner info" v-if="!layout && fontOk">字体状态：{{ session.fontText.value }}</div>
 
       <div class="split">
         <section class="card">
@@ -201,15 +209,18 @@ function areaM2(w: number, h: number): string {
           <div class="field" style="margin-top: 8px">
             <label>字体</label>
             <div class="ctl">
-              <select v-model="project.layout.settings.fontId">
-                <option v-for="f in fonts" :key="f.id" :value="f.id">{{ f.label }}（{{ f.family }}）</option>
+              <select :value="project.layout.settings.fontId" @change="onPickFont(($event.target as HTMLSelectElement).value)">
+                <option v-for="f in fonts" :key="f.id" :value="f.id">
+                  {{ f.label }}（{{ f.family }}）{{ f.local ? '· 本机' : '· 自带' }}
+                </option>
               </select>
+              <span class="tag bad" v-if="!selectedFont">字库中无此名称</span>
             </div>
           </div>
           <div class="field">
             <label>字重</label>
             <div class="ctl">
-              <select v-model.number="project.layout.settings.weight">
+              <select :value="project.layout.settings.weight" @change="onPickWeight(Number(($event.target as HTMLSelectElement).value))">
                 <option v-for="w in weightOptions" :key="w" :value="w">{{ w }}</option>
               </select>
               <span class="muted" v-if="weightOptions.length < 2">该字体只有 1 个字重</span>

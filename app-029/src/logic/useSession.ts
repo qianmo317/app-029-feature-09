@@ -4,7 +4,17 @@
  */
 
 import { computed, ref, watch, type ComputedRef, type Ref } from 'vue'
-import { ensureFont, findFont, fontState } from './fontLoader'
+import {
+  canonicalSettings,
+  ensureResolved,
+  findFont,
+  findFontByFamily,
+  fontState,
+  listFonts,
+  resolveProjectFont,
+  type ResolvedFontRef,
+  type RuntimeFont
+} from './fontLoader'
 import { computeLayout, type LayoutResult } from './layout'
 import { buildBom, type BomResult, type BomOptions, type Preset } from './materials'
 import { loadPreset, savePreset, saveProject } from './store'
@@ -17,6 +27,12 @@ export interface Session {
   fontTick: Ref<number>
   fontText: ComputedRef<string>
   fontOk: ComputedRef<boolean>
+  /** 当前项目字体引用的解析结果（名称、来源、是否缺失） */
+  fontRef: ComputedRef<ResolvedFontRef>
+  /** 可替换的字体清单（字库中当前可用的字体/字重） */
+  replacementFonts: ComputedRef<RuntimeFont[]>
+  /** 把项目字体换成字库里另一份（按名称写回，刷新不断） */
+  switchFont: (fontId: string, weight: number) => void
   layout: ComputedRef<LayoutResult | null>
   layoutAt: (autoSize: boolean) => LayoutResult | null
   bom: (opts?: BomOptions) => BomResult | null
@@ -31,38 +47,84 @@ export function useSession(projectRef: Ref<Project | null>): Session {
   const fontTick = ref(0)
   const perfMs = ref(0)
 
+  const fontRef = computed<ResolvedFontRef>(() => {
+    void fontTick.value
+    const p = projectRef.value
+    if (!p) {
+      return { font: null, weight: 400, origin: null, familyName: '', missing: true, refFrom: '该项目' }
+    }
+    return resolveProjectFont(p.layout.settings, `项目「${p.name}」`)
+  })
+
   const fontText = computed(() => {
     void fontTick.value
     const p = projectRef.value
     if (!p) return ''
-    const st = fontState(p.layout.settings.fontId, p.layout.settings.weight)
-    const f = findFont(p.layout.settings.fontId)
-    const label = f ? `${f.label}（${f.family}）` : '未知字体'
+    const ref = resolveProjectFont(p.layout.settings, `项目「${p.name}」`)
+    const label = ref.font ? `${ref.font.label}（${ref.font.family}）` : ref.familyName ? `「${ref.familyName}」` : '未知字体'
+    const st = fontState(ref.familyName || ref.font?.family || '', ref.weight)
     if (st.state === 'error') return `${label}：${st.message}`
+    if (st.state === 'fallback') return `${label}：${st.message}`
     if (st.state === 'loading') return `${label}：${st.message}`
-    return `${label} 字重 ${p.layout.settings.weight} · ${st.message || '未加载'}`
+    if (st.state === 'ready') return `${label} 字重 ${ref.weight} · ${st.message}`
+    return `${label} 字重 ${ref.weight} · ${ref.missing ? '字体不可用' : '未加载'}`
   })
 
   const fontOk = computed(() => {
     void fontTick.value
     const p = projectRef.value
     if (!p) return false
-    return fontState(p.layout.settings.fontId, p.layout.settings.weight).state === 'ready'
+    const ref = resolveProjectFont(p.layout.settings, `项目「${p.name}」`)
+    if (ref.missing) return false
+    // ready/fallback 都能排（fallback 已在提示中说清是同名自带字顶替），error/idle 不能排
+    const st = fontState(ref.familyName, ref.weight).state
+    return st === 'ready' || st === 'fallback'
   })
 
   watch(
-    () => [projectRef.value?.layout.settings.fontId, projectRef.value?.layout.settings.weight] as const,
-    async ([fontId, weight]) => {
-      if (!fontId || !weight) return
+    () => [projectRef.value?.layout.settings.fontId, projectRef.value?.layout.settings.fontFamily, projectRef.value?.layout.settings.weight] as const,
+    async ([fontId, family, weight]) => {
+      if (!projectRef.value || weight === undefined) return
+      const ref = resolveProjectFont(projectRef.value.layout.settings, `项目「${projectRef.value.name}」`)
+      // 归一化旧数据（旧项目只有自带 id）：按名称补全写回，保证后续按名称认
+      if (!ref.missing && ref.font && (!family || family !== ref.font.family || fontId !== ref.font.id)) {
+        const c = canonicalSettings({ fontId: fontId ?? ref.font.id, fontFamily: family ?? ref.font.family, weight: ref.weight })
+        const s = projectRef.value.layout.settings
+        if (s.fontId !== c.fontId || s.fontFamily !== c.fontFamily || s.weight !== c.weight) {
+          s.fontId = c.fontId
+          s.fontFamily = c.fontFamily
+          s.weight = c.weight
+        }
+      }
       try {
-        await ensureFont(fontId, weight)
+        await ensureResolved(ref)
       } catch {
-        // 解析失败已在 fontState 中给出「该字体不可用」提示
+        // 解析失败已在 fontState 中给出「该字体不可用」提示与换字体入口
       }
       fontTick.value++
     },
     { immediate: true }
   )
+
+  const replacementFonts = computed(() => {
+    void fontTick.value
+    return listFonts()
+  })
+
+  function switchFont(fontId: string, weight: number): void {
+    const p = projectRef.value
+    if (!p) return
+    const f = findFont(fontId) ?? findFontByFamily(fontId)
+    if (!f) return
+    const w = f.weights.find((x) => x.weight === weight) ?? f.weights[0]
+    const c = canonicalSettings({ fontId: f.id, fontFamily: f.family, weight: w.weight })
+    p.layout.settings.fontId = c.fontId
+    p.layout.settings.fontFamily = c.fontFamily
+    p.layout.settings.weight = c.weight
+    // watcher 会负责解析；这里先主动触发一次，交互更跟手
+    void ensureResolved(resolveProjectFont(p.layout.settings, `项目「${p.name}」`)).catch(() => undefined)
+    fontTick.value++
+  }
 
   const layoutAt = (autosize: boolean): LayoutResult | null => {
     const p = projectRef.value
@@ -106,5 +168,21 @@ export function useSession(projectRef: Ref<Project | null>): Session {
     { deep: true }
   )
 
-  return { project: projectRef, preset, autoFit, fontTick, fontText, fontOk, layout, layoutAt, bom, save, savePresetNow, perfMs }
+  return {
+    project: projectRef,
+    preset,
+    autoFit,
+    fontTick,
+    fontText,
+    fontOk,
+    fontRef,
+    replacementFonts,
+    switchFont,
+    layout,
+    layoutAt,
+    bom,
+    save,
+    savePresetNow,
+    perfMs
+  }
 }

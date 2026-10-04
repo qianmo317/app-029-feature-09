@@ -1,16 +1,23 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { listFonts } from './logic/fontLoader'
+import { initFonts, listFonts } from './logic/fontLoader'
 import { loadPreset } from './logic/store'
 
 const route = useRoute()
 const projectId = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''))
 const presetVersion = ref(loadPreset().version)
-onMounted(() => {
-  presetVersion.value = loadPreset().version
+const fontTick = ref(0)
+const fontCount = computed(() => {
+  void fontTick.value
+  return listFonts().length
 })
-const fontCount = computed(() => listFonts().length)
+
+onMounted(async () => {
+  presetVersion.value = loadPreset().version
+  await initFonts()
+  fontTick.value++
+})
 </script>
 
 <template>
@@ -27,7 +34,7 @@ const fontCount = computed(() => listFonts().length)
         <router-link to="/presets">材质与工艺</router-link>
       </nav>
       <div class="spacer"></div>
-      <div class="proj">本地字体 {{ fontCount }} 项 · 预设置版本 {{ presetVersion }} · 数据全部本地存储</div>
+      <div class="proj">本地字库 {{ fontCount }} 项（自带 + 本机登记）· 预设置版本 {{ presetVersion }} · 数据全部本地存储</div>
     </header>
     <main>
       <router-view :key="route.fullPath" />
