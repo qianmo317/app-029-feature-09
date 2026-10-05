@@ -5,6 +5,7 @@
 
 import materialsData from '../data/materials.json'
 import type { Preset } from './materials'
+import { findFont } from './fontLoader'
 import { defaultProject } from './layout'
 import type { Project } from './types'
 
@@ -81,8 +82,23 @@ export function createProject(name: string, panel?: { wMm?: number; hMm?: number
   const p = defaultProject(newId(), panel)
   p.name = name
   const prefs = loadPrefs()
-  p.layout.settings.fontId = prefs.defaultFontId
-  p.layout.settings.weight = prefs.defaultWeight
+  const prefFont = findFont(prefs.defaultFontId)
+  if (prefFont && prefFont.status === 'ready') {
+    p.layout.settings.fontId = prefFont.id
+    p.layout.settings.weight = prefFont.weights.some((w) => w.weight === prefs.defaultWeight)
+      ? prefs.defaultWeight
+      : prefFont.weights[0].weight
+    p.layout.settings.fontFamily = prefFont.family
+  } else if (!prefFont && prefs.defaultFontId.startsWith('local-')) {
+    // 本机字库可能尚未恢复完成：先按登记 id 建项目，恢复后按名称解析
+    p.layout.settings.fontId = prefs.defaultFontId
+    p.layout.settings.weight = prefs.defaultWeight
+  } else {
+    // 默认字体已删除/不可用：回落到自带黑体，不沿用失效登记
+    p.layout.settings.fontId = 'hei'
+    p.layout.settings.weight = 400
+    p.layout.settings.fontFamily = findFont('hei')?.family
+  }
   saveProject(p)
   return p
 }

@@ -39,6 +39,7 @@ declare module 'opentype.js' {
     numGlyphs: number
     familyName: string
     names: Record<string, Record<string, string>>
+    tables: { os2?: { usWeightClass?: number } } & Record<string, unknown>
     charToGlyph(char: string | number): Glyph
     stringToGlyphs(text: string): Glyph[]
     getPath(text: string, x: number, y: number, fontSize: number, options?: unknown): Path

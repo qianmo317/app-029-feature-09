@@ -13,6 +13,7 @@ const session = useSession(loaded)
 const project = computed(() => loaded.value)
 const layout = session.layout
 const preset = session.preset
+const fontIssue = session.fontIssue
 
 const led = computed(() =>
   project.value && layout.value
@@ -51,6 +52,10 @@ const grade = computed(() => {
     </div>
 
     <template v-else>
+      <div v-if="fontIssue && !fontIssue.ok" class="banner bad">
+        {{ fontIssue.text }}
+        <router-link :to="`/edit/${project.id}`" style="margin-left: 8px">前往「排版编辑」更换字体</router-link>
+      </div>
       <div class="split">
         <section class="card">
           <header>

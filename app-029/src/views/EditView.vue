@@ -2,7 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PanelPreview from '../components/PanelPreview.vue'
-import { findFont, fontState, listFonts } from '../logic/fontLoader'
+import { findFont, fontState, listSelectableFonts } from '../logic/fontLoader'
 import { round1, textToItems } from '../logic/layout'
 import { getProject } from '../logic/store'
 import { loadPrefs, savePrefs } from '../logic/store'
@@ -19,10 +19,27 @@ const fontError = ref('')
 
 const project = computed(() => loaded.value)
 const layout = session.layout
-const fonts = computed(() => listFonts())
-const weightOptions = computed(() =>
-  project.value ? findFont(project.value.layout.settings.fontId)?.weights.map((w) => w.weight) ?? [] : []
-)
+const fontIssue = session.fontIssue
+// 字体下拉只列可用字体；当前引用的字体若已不可用，追加一个标记项，便于看清现状并换走
+const fonts = computed(() => {
+  void session.fontTick.value
+  const list = listSelectableFonts()
+  const cur = project.value?.layout.settings.fontId
+  if (cur && !list.some((f) => f.id === cur)) {
+    const gone = findFont(cur)
+    const label = gone ? `${gone.label}（已不可用）` : `${project.value?.layout.settings.fontFamily || cur}（已不可用）`
+    return [...list, { id: cur, label, family: gone?.family ?? '', weights: [] }]
+  }
+  return list
+})
+const weightOptions = computed(() => {
+  const p = project.value
+  if (!p) return []
+  void session.fontTick.value
+  const ws = findFont(p.layout.settings.fontId)?.weights.map((w) => w.weight) ?? []
+  if (!ws.includes(p.layout.settings.weight)) ws.push(p.layout.settings.weight)
+  return ws
+})
 
 const text = computed({
   get: () => {
@@ -58,7 +75,7 @@ onMounted(async () => {
   const p = project.value
   if (p) {
     try {
-      await (await import('../logic/fontLoader')).ensureFont(p.layout.settings.fontId, p.layout.settings.weight)
+      await (await import('../logic/fontLoader')).ensureFont(p.layout.settings.fontId, p.layout.settings.weight, p.layout.settings.fontFamily)
       fontError.value = ''
     } catch (e) {
       fontError.value = e instanceof Error ? e.message : '该字体不可用'
@@ -164,7 +181,12 @@ function areaM2(w: number, h: number): string {
     </div>
 
     <template v-else>
-      <div class="banner bad" v-if="fontError">{{ fontError }}</div>
+      <div class="banner bad" v-if="fontIssue && !fontIssue.ok">
+        {{ fontIssue.text }}
+        <div style="margin-top: 4px">在下方「字体」一栏改选其他可用字体，保存后即可继续排版。</div>
+      </div>
+      <div class="banner warn" v-else-if="fontIssue && fontIssue.resolvedId !== project.layout.settings.fontId">{{ fontIssue.text }}</div>
+      <div class="banner bad" v-else-if="fontError">{{ fontError }}</div>
       <div class="banner info" v-else-if="!fontOk">字体状态：{{ fontStatus }}</div>
 
       <div class="split">
@@ -202,7 +224,7 @@ function areaM2(w: number, h: number): string {
             <label>字体</label>
             <div class="ctl">
               <select v-model="project.layout.settings.fontId">
-                <option v-for="f in fonts" :key="f.id" :value="f.id">{{ f.label }}（{{ f.family }}）</option>
+                <option v-for="f in fonts" :key="f.id" :value="f.id">{{ f.family ? `${f.label}（${f.family}）` : f.label }}</option>
               </select>
             </div>
           </div>
@@ -292,7 +314,7 @@ function areaM2(w: number, h: number): string {
               :night="nightPref"
               :active-char="active"
             />
-            <p v-else class="muted">字体加载中…</p>
+            <p v-else class="muted">{{ fontIssue && !fontIssue.ok ? '字体不可用，无法排版（详见上方提示，更换字体后恢复）' : '字体加载中…' }}</p>
           </div>
 
           <div class="grid cols-2" style="margin-top: 14px" v-if="layout">
@@ -422,7 +444,7 @@ function areaM2(w: number, h: number): string {
           <div class="card" style="margin-top: 14px" v-if="layout && activeGlyph">
             <header>
               <h2>字形分析：「{{ activeGlyph.char }}」</h2>
-              <span class="hint">{{ findFont(project.layout.settings.fontId)?.family }} · 字号 {{ layout.sizeMm }}mm</span>
+              <span class="hint">{{ fontIssue?.label ?? findFont(project.layout.settings.fontId)?.family }} · 字号 {{ layout.sizeMm }}mm</span>
             </header>
             <div class="grid cols-2">
               <div>

@@ -32,6 +32,8 @@ export interface LayoutSettings {
   baseSizeMm: number
   fontId: string
   weight: number
+  /** 保存时的字体家族名快照：登记条目丢失（本机字体被删除）后按名称找回/回落 */
+  fontFamily?: string
   strokeLimitMm: number
   /** 默认字距 = trackRatio × 字号 */
   trackRatio: number

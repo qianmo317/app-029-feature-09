@@ -1,16 +1,22 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useRoute } from 'vue-router'
-import { listFonts } from './logic/fontLoader'
+import { listFonts, localFontsReady } from './logic/fontLoader'
 import { loadPreset } from './logic/store'
 
 const route = useRoute()
 const projectId = computed(() => (typeof route.params.id === 'string' ? route.params.id : ''))
 const presetVersion = ref(loadPreset().version)
-onMounted(() => {
+const fontTick = ref(0)
+onMounted(async () => {
   presetVersion.value = loadPreset().version
+  await localFontsReady
+  fontTick.value++
 })
-const fontCount = computed(() => listFonts().length)
+const fontCount = computed(() => {
+  void fontTick.value
+  return listFonts().filter((f) => f.status === 'ready').length
+})
 </script>
 
 <template>

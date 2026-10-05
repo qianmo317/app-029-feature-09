@@ -16,6 +16,7 @@ const session = useSession(loaded)
 const project = computed(() => loaded.value)
 const layout = session.layout
 const preset = session.preset
+const fontIssue = session.fontIssue
 const ack = ref(false)
 
 const bom = computed(() => (project.value && layout.value ? buildBom(project.value, layout.value, preset.value, { acknowledgeThinStroke: ack.value }) : null))
@@ -43,7 +44,8 @@ function applySheet(id: string): void {
 
 function processCard(): void {
   if (project.value && layout.value && bom.value) {
-    exportProcessCardCsv(project.value, layout.value, bom.value, findFont(project.value.layout.settings.fontId)?.family ?? '')
+    const family = findFont(project.value.layout.settings.fontId)?.family ?? project.value.layout.settings.fontFamily ?? ''
+    exportProcessCardCsv(project.value, layout.value, bom.value, family)
   }
 }
 </script>
@@ -56,6 +58,10 @@ function processCard(): void {
     </div>
 
     <template v-else>
+      <div v-if="fontIssue && !fontIssue.ok" class="banner bad">
+        {{ fontIssue.text }}
+        <router-link :to="`/edit/${project.id}`" style="margin-left: 8px">前往「排版编辑」更换字体</router-link>
+      </div>
       <div v-if="bom?.blocked" class="banner bad">
         <b>工艺风险拦截：</b>
         <ul class="notes" style="color: inherit">

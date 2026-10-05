@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { ensureFont, findFont, listFonts } from '../logic/fontLoader'
+import { ensureFont, findFont, listSelectableFonts, localFontsReady, projectFontIssue } from '../logic/fontLoader'
 import { computeLayout, mountingLabel, textToItems } from '../logic/layout'
 import { buildBom } from '../logic/materials'
 import { compareMaterials } from '../logic/materials'
@@ -16,6 +16,7 @@ const preset = ref(loadPreset())
 const prefs = loadPrefs()
 const error = ref('')
 const batchTick = ref(0)
+const fontTick = ref(0)
 const selected = ref<string[]>([])
 
 const draft = ref({
@@ -32,14 +33,27 @@ const draft = ref({
   trackRatio: 0.1
 })
 
-const fonts = computed(() => listFonts())
+const fonts = computed(() => {
+  void fontTick.value
+  return listSelectableFonts()
+})
 const weightOptions = computed(() => findFont(draft.value.fontId)?.weights.map((w) => w.weight) ?? [400])
 
 function refresh(): void {
   projects.value = listProjects()
 }
 
-onMounted(refresh)
+/** 项目字体状态（统一说法）：不可用时在列表行标红 */
+function projectFontTag(p: Project): string | null {
+  void fontTick.value
+  return projectFontIssue(p.layout.settings).ok ? null : '字体不可用'
+}
+
+onMounted(async () => {
+  refresh()
+  await localFontsReady
+  fontTick.value++
+})
 
 watch(
   () => draft.value.fontId,
@@ -48,6 +62,14 @@ watch(
     if (!ws.includes(draft.value.weight)) draft.value.weight = ws[0]
   }
 )
+
+// 草稿字体失效（默认字体被删除等）时回落到自带黑体，不把失效登记带进新项目
+watch(fonts, (list) => {
+  if (!list.some((f) => f.id === draft.value.fontId)) {
+    draft.value.fontId = 'hei'
+    draft.value.weight = 400
+  }
+})
 
 function create(): void {
   error.value = ''
@@ -100,15 +122,18 @@ function charCount(p: Project): number {
 
 // ---------- 导视牌批量：统一排版 + 材料汇总 ----------
 watch(selected, async () => {
-  const need = new Set<string>()
+  const need = new Map<string, { fid: string; w: number; fam?: string }>()
   for (const p of projects.value) {
     if (!selected.value.includes(p.id)) continue
-    need.add(`${p.layout.settings.fontId}|${p.layout.settings.weight}`)
+    need.set(`${p.layout.settings.fontId}|${p.layout.settings.weight}`, {
+      fid: p.layout.settings.fontId,
+      w: p.layout.settings.weight,
+      fam: p.layout.settings.fontFamily
+    })
   }
-  for (const key of need) {
-    const [fid, w] = key.split('|')
+  for (const { fid, w, fam } of need.values()) {
     try {
-      await ensureFont(fid, Number(w))
+      await ensureFont(fid, w, fam)
     } catch {
       // 字体不可用时该项会显示缺失提示
     }
@@ -269,8 +294,10 @@ function applyUnified(): void {
               <td><input type="checkbox" :value="p.id" v-model="selected" /></td>
               <td>
                 <a href="#" @click.prevent="open(p.id)">{{ p.name }}</a>
+                <span v-if="projectFontTag(p)" class="tag bad" style="margin-left: 6px">{{ projectFontTag(p) }}</span>
                 <div class="muted">
-                  {{ findFont(p.layout.settings.fontId)?.label }} · {{ p.layout.settings.baseSizeMm }}mm ·
+                  {{ findFont(p.layout.settings.fontId)?.label ?? p.layout.settings.fontFamily ?? '未知字体' }} ·
+                  {{ p.layout.settings.baseSizeMm }}mm ·
                   {{ mountingLabel(p.layout.panel.mounting) }}
                 </div>
               </td>

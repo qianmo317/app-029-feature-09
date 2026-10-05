@@ -6,6 +6,14 @@
 import testchars from '../data/testchars.json'
 import { computeLed } from './led'
 import { clearGeometryCache, ensureFont, findFont, getGlyphGeom } from './fontLoader'
+import {
+  LOCAL_FONT_MAX_FILE_BYTES,
+  LOCAL_FONT_QUOTA_BYTES,
+  planEviction,
+  projectFontStatus,
+  resolveFontEntry,
+  type FontEntryMeta
+} from './fontRegistry'
 import { computeLayout, defaultProject, textToItems, type LayoutResult } from './layout'
 import { assertBomSum, buildBom, compareMaterials, defaultPreset, type Preset } from './materials'
 import { nestPieces, type Piece } from './nesting'
@@ -386,6 +394,84 @@ export async function runAcceptance(preset: Preset = defaultPreset): Promise<Acc
     detail: blockScan.every((b) => b.same) ? '两套算法结果完全一致' : '存在不一致',
     evidence: blockScan.map((b) => `${b.char}：扫描线并查集=${b.scanline}，光栅洪泛=${b.raster}${b.same ? '' : ' ✗'}`)
   })
+
+  // ---------- 11. 本机字体登记：同名按名称认、删除回落、淘汰计划、统一说法 ----------
+  {
+    const mk = (over: Partial<FontEntryMeta>): FontEntryMeta => ({
+      id: 'x',
+      label: 'x',
+      family: 'x',
+      weights: [400],
+      origin: 'local',
+      status: 'ready',
+      license: '用户自行确认可商用使用',
+      licenseConfirmedBy: '张三',
+      source: 'x.ttf',
+      sizeBytes: 0,
+      createdAt: 0,
+      lastUsedAt: 0,
+      removedAt: null,
+      statusNote: '',
+      ...over
+    })
+    const builtinHei = mk({ id: 'hei', label: '黑体', family: 'Noto Sans SC', weights: [400, 700], origin: 'builtin', licenseConfirmedBy: '随应用打包（开源授权）' })
+    const localSame = mk({ id: 'local-a', label: 'Noto Sans SC（本机登记）', family: 'Noto Sans SC', weights: [400], createdAt: 100 })
+    const ev: string[] = []
+    // 1) 同名按名称认：本机登记优先于自带，且与条目先后无关（两种顺序各断一次）
+    const r1a = resolveFontEntry([builtinHei, localSame], { fontId: 'hei', weight: 400 })
+    const r1b = resolveFontEntry([localSame, builtinHei], { fontId: 'hei', weight: 400 })
+    const p1 = r1a.entry?.id === 'local-a' && r1a.source === 'by-name-local' && r1b.entry?.id === 'local-a' && r1b.source === 'by-name-local'
+    ev.push(`同名解析（两种登记顺序）：命中 ${r1a.entry?.id}/${r1b.entry?.id}（期望均为 local-a，本机登记优先，与先后无关）source=${r1a.source}`)
+    // 2) 字重严格匹配：本机只有 400，不劫持自带的 700
+    const r2 = resolveFontEntry([builtinHei, localSame], { fontId: 'hei', weight: 700 })
+    const p2 = r2.entry?.id === 'hei' && r2.source === 'exact'
+    ev.push(`字重严格匹配：hei/700 命中 ${r2.entry?.id}（期望 hei，本机同名片只有 400 不劫持）`)
+    // 3) 本机字体被删除后按同一条名称规则回落自带
+    const removed = { ...localSame, status: 'removed' as const, statusNote: '手动删除' }
+    const r3 = resolveFontEntry([builtinHei, removed], { fontId: 'local-a', weight: 400, fontFamily: 'Noto Sans SC' })
+    const p3 = r3.entry?.id === 'hei' && r3.source === 'by-name-builtin'
+    ev.push(`删除后回落：local-a 已删除 → 命中 ${r3.entry?.id}（期望 hei，按名称回落自带）source=${r3.source}`)
+    // 4) 无同名可用 → 统一说法：点名字体、说明不能排、两次调用文案一致（各页面同一说法）
+    const gone = mk({ id: 'local-b', label: 'My Brand（本机登记）', family: 'My Brand', status: 'removed', statusNote: '手动删除' })
+    const s1 = projectFontStatus([builtinHei, gone], { fontId: 'local-b', weight: 400, fontFamily: 'My Brand' })
+    const s2 = projectFontStatus([builtinHei, gone], { fontId: 'local-b', weight: 400, fontFamily: 'My Brand' })
+    const p4 =
+      !s1.ok &&
+      !s1.canLayout &&
+      s1.text.includes('My Brand') &&
+      s1.text.includes('无法排版') &&
+      s1.text.includes('改选其他字体') &&
+      s1.text === s2.text
+    ev.push(`不可用统一说法：ok=${s1.ok}，文案点名字体与状态=${s1.text.includes('My Brand') && s1.text.includes('无法排版')}，两次调用一致=${s1.text === s2.text}`)
+    ev.push(`说法原文：${s1.text}`)
+    // 5) 淘汰计划：最久未使用先腾；全腾完仍不够 → 拒绝（null）
+    const MB = 1024 * 1024
+    const eA = mk({ id: 'a', sizeBytes: 20 * MB, lastUsedAt: 1 })
+    const eB = mk({ id: 'b', sizeBytes: 15 * MB, lastUsedAt: 2 })
+    const eC = mk({ id: 'c', sizeBytes: 3 * MB, lastUsedAt: 3 })
+    const plan1 = planEviction([eA, eB, eC], 10 * MB)
+    const plan2 = planEviction([eA, eB, eC], 25 * MB)
+    const plan3 = planEviction([eA, eB, eC], 45 * MB)
+    const p5 =
+      plan1 !== null &&
+      plan1.evict.map((e) => e.id).join(',') === 'a' &&
+      plan2 !== null &&
+      plan2.evict.map((e) => e.id).join(',') === 'a,b' &&
+      plan3 === null &&
+      LOCAL_FONT_QUOTA_BYTES === 40 * MB &&
+      LOCAL_FONT_MAX_FILE_BYTES === 20 * MB
+    ev.push(
+      `淘汰计划（上限 40MB，已有 20+15+3MB）：+10MB 腾 [${plan1?.evict.map((e) => e.id)}]（最久未使用先腾）；+25MB 腾 [${plan2?.evict.map((e) => e.id)}]；+45MB → ${plan3 === null ? '拒绝登记' : '错误放行'}`
+    )
+    ev.push('隔离性：字体数据存 IndexedDB（app029-fonts），项目/预设/偏好存 localStorage，淘汰只清字体数据并留墓碑，不触碰任何项目设置')
+    checks.push({
+      id: 'A11',
+      title: '本机字体登记：同名按名称认（非按先后）、删除后按同一规则回落、不可用统一说法、LRU 淘汰计划',
+      pass: p1 && p2 && p3 && p4 && p5,
+      detail: p1 && p2 && p3 && p4 && p5 ? '通过' : '未通过',
+      evidence: ev
+    })
+  }
 
   const elapsedMs = performance.now() - t0
   return { checks, allPass: checks.every((c) => c.pass), elapsedMs, blockScan }

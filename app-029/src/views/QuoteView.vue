@@ -15,6 +15,7 @@ const session = useSession(loaded)
 const project = computed(() => loaded.value)
 const layout = session.layout
 const preset = session.preset
+const fontIssue = session.fontIssue
 const ack = ref(false)
 const mode = ref<'quote' | 'card'>('quote')
 const printed = ref(false)
@@ -26,7 +27,7 @@ const fontLabel = computed(() => {
   const p = project.value
   if (!p) return ''
   const f = findFont(p.layout.settings.fontId)
-  return f ? `${f.label}（${f.family}）` : ''
+  return f ? `${f.label}（${f.family}）` : p.layout.settings.fontFamily ?? '未知字体'
 })
 const doc = computed(() =>
   project.value && layout.value && bom.value ? buildQuoteDoc(project.value, layout.value, bom.value, fontLabel.value) : null
@@ -62,6 +63,10 @@ function toCsv(): void {
     </div>
 
     <template v-else>
+      <div v-if="fontIssue && !fontIssue.ok" class="banner bad no-print">
+        {{ fontIssue.text }}
+        <router-link :to="`/edit/${project.id}`" style="margin-left: 8px">前往「排版编辑」更换字体</router-link>
+      </div>
       <div class="row no-print" style="margin-bottom: 12px">
         <button class="primary" :disabled="bom?.blocked" @click="printNow">打印 / 导出 PDF</button>
         <button :disabled="bom?.blocked" @click="toExcel">导出 Excel（.xls）</button>
